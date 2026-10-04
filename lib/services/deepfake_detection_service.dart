@@ -177,7 +177,7 @@ class DeepfakeDetectionService {
       }
     }
 
-    final flat = float32Buffer ?? int8Buffer ?? uint8Buffer!;
+    final dynamic flat = float32Buffer ?? int8Buffer ?? uint8Buffer!;
     return flat.reshape([1, _inputHeight, _inputWidth, _inputChannels]);
   }
 
