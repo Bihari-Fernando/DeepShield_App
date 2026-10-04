@@ -130,18 +130,24 @@ class DeepfakeDetectionService {
     return _interpretOutput(output, stopwatch.elapsedMilliseconds);
   }
 
-  /// Builds a quantized input tensor shaped [1, H, W, C].
+  /// Builds an input tensor shaped [1, H, W, C].
   ///
   /// Values are normalized to [0, 1] the same way the model was
-  /// trained, then quantized with the model's own scale/zero-point —
-  /// this is the correct way to feed an INT8 model and avoids ever
-  /// converting the model itself back to float32.
+  /// trained. For an int8/uint8 model that's then quantized with the
+  /// model's own scale/zero-point; for a float32 model (e.g. one
+  /// converted with `inference_input_type = tf.float32` so only the
+  /// weights are int8-quantized internally) the normalized [0,1]
+  /// value is used directly, matching how the model was trained and
+  /// evaluated.
   dynamic _buildInputBuffer(img.Image image) {
-    final isInt8 = _inputType == TensorType.int8;
     final length = _inputHeight * _inputWidth * _inputChannels;
 
-    final Int8List? int8Buffer = isInt8 ? Int8List(length) : null;
-    final Uint8List? uint8Buffer = isInt8 ? null : Uint8List(length);
+    final Int8List? int8Buffer =
+        _inputType == TensorType.int8 ? Int8List(length) : null;
+    final Uint8List? uint8Buffer =
+        _inputType == TensorType.uint8 ? Uint8List(length) : null;
+    final Float32List? float32Buffer =
+        _inputType == TensorType.float32 ? Float32List(length) : null;
 
     var i = 0;
     for (var y = 0; y < _inputHeight; y++) {
@@ -154,31 +160,39 @@ class DeepfakeDetectionService {
 
         for (final raw in channelValues) {
           final normalized = raw / 255.0;
-          final quantized =
-              (normalized / _inputScale + _inputZeroPoint).round();
 
-          if (isInt8) {
-            int8Buffer![i] = quantized.clamp(-128, 127);
+          if (float32Buffer != null) {
+            float32Buffer[i] = normalized.toDouble();
           } else {
-            uint8Buffer![i] = quantized.clamp(0, 255);
+            final quantized =
+                (normalized / _inputScale + _inputZeroPoint).round();
+            if (int8Buffer != null) {
+              int8Buffer[i] = quantized.clamp(-128, 127);
+            } else {
+              uint8Buffer![i] = quantized.clamp(0, 255);
+            }
           }
           i++;
         }
       }
     }
 
-    final flat = isInt8 ? int8Buffer! : uint8Buffer!;
+    final flat = float32Buffer ?? int8Buffer ?? uint8Buffer!;
     return flat.reshape([1, _inputHeight, _inputWidth, _inputChannels]);
   }
 
   dynamic _buildOutputBuffer() {
-    final isInt8 = _outputType == TensorType.int8;
     final flatLength = _outputShape.reduce((a, b) => a * b);
-    final flat = isInt8 ? Int8List(flatLength) : Uint8List(flatLength);
+    final dynamic flat = switch (_outputType) {
+      TensorType.int8 => Int8List(flatLength),
+      TensorType.float32 => Float32List(flatLength),
+      _ => Uint8List(flatLength),
+    };
     return flat.reshape(_outputShape);
   }
 
-  /// Dequantizes the raw output and turns it into a [DetectionResult].
+  /// Dequantizes (or, for a float32 model, simply reads) the raw
+  /// output and turns it into a [DetectionResult].
   ///
   /// Two output layouts are supported out of the box:
   ///  * shape [1, 2]  -> [realScore, fakeScore] logits, softmax'd here.
@@ -187,8 +201,13 @@ class DeepfakeDetectionService {
   /// see MODEL_INTEGRATION.md.
   DetectionResult _interpretOutput(dynamic output, int inferenceTimeMs) {
     final List<dynamic> row = (output as List).first as List;
+    final bool isFloat = _outputType == TensorType.float32;
     final List<double> dequantized = row
-        .map((v) => _outputScale * ((v as num).toInt() - _outputZeroPoint))
+        .map(
+          (v) => isFloat
+              ? (v as num).toDouble()
+              : _outputScale * ((v as num).toInt() - _outputZeroPoint),
+        )
         .toList();
 
     if (dequantized.length >= 2) {
