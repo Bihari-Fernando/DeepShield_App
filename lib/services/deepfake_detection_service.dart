@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
@@ -130,7 +129,7 @@ class DeepfakeDetectionService {
     return _interpretOutput(output, stopwatch.elapsedMilliseconds);
   }
 
-  /// Builds an input tensor shaped [1, H, W, C].
+  /// Builds an input tensor shaped [1, H, W, C] as plain nested Lists.
   ///
   /// Values are normalized to [0, 1] the same way the model was
   /// trained. For an int8/uint8 model that's then quantized with the
@@ -139,56 +138,63 @@ class DeepfakeDetectionService {
   /// weights are int8-quantized internally) the normalized [0,1]
   /// value is used directly, matching how the model was trained and
   /// evaluated.
+  ///
+  /// This builds nested `List`s by hand instead of a flat TypedData
+  /// buffer reshaped via tflite_flutter's `reshape` extension: that
+  /// extension throws `NoSuchMethodError` on `Float32List` at runtime
+  /// (a limitation of the package, not of the model), even though it
+  /// compiles fine. Plain nested Lists work for every tensor type.
   dynamic _buildInputBuffer(img.Image image) {
-    final length = _inputHeight * _inputWidth * _inputChannels;
+    final bool isFloat = _inputType == TensorType.float32;
+    final bool isInt8 = _inputType == TensorType.int8;
 
-    final Int8List? int8Buffer =
-        _inputType == TensorType.int8 ? Int8List(length) : null;
-    final Uint8List? uint8Buffer =
-        _inputType == TensorType.uint8 ? Uint8List(length) : null;
-    final Float32List? float32Buffer =
-        _inputType == TensorType.float32 ? Float32List(length) : null;
+    final List<List<List<num>>> rows = List.generate(
+      _inputHeight,
+      (y) => List.generate(
+        _inputWidth,
+        (x) {
+          final pixel = image.getPixel(x, y);
+          final List<num> channelValues = _inputChannels == 1
+              ? [img.getLuminance(pixel)]
+              : [pixel.r, pixel.g, pixel.b];
 
-    var i = 0;
-    for (var y = 0; y < _inputHeight; y++) {
-      for (var x = 0; x < _inputWidth; x++) {
-        final pixel = image.getPixel(x, y);
-
-        final List<num> channelValues = _inputChannels == 1
-            ? [img.getLuminance(pixel)]
-            : [pixel.r, pixel.g, pixel.b];
-
-        for (final raw in channelValues) {
-          final normalized = raw / 255.0;
-
-          if (float32Buffer != null) {
-            float32Buffer[i] = normalized.toDouble();
-          } else {
+          return channelValues.map((raw) {
+            final normalized = raw / 255.0;
+            if (isFloat) {
+              return normalized.toDouble();
+            }
             final quantized =
                 (normalized / _inputScale + _inputZeroPoint).round();
-            if (int8Buffer != null) {
-              int8Buffer[i] = quantized.clamp(-128, 127);
-            } else {
-              uint8Buffer![i] = quantized.clamp(0, 255);
-            }
-          }
-          i++;
-        }
-      }
-    }
+            return isInt8
+                ? quantized.clamp(-128, 127)
+                : quantized.clamp(0, 255);
+          }).toList(growable: false);
+        },
+        growable: false,
+      ),
+      growable: false,
+    );
 
-    final dynamic flat = float32Buffer ?? int8Buffer ?? uint8Buffer!;
-    return flat.reshape([1, _inputHeight, _inputWidth, _inputChannels]);
+    return [rows];
   }
 
+  /// Builds an output buffer matching [_outputShape] as plain nested
+  /// Lists (see [_buildInputBuffer] for why this avoids `reshape`).
   dynamic _buildOutputBuffer() {
-    final flatLength = _outputShape.reduce((a, b) => a * b);
-    final dynamic flat = switch (_outputType) {
-      TensorType.int8 => Int8List(flatLength),
-      TensorType.float32 => Float32List(flatLength),
-      _ => Uint8List(flatLength),
-    };
-    return flat.reshape(_outputShape);
+    List<dynamic> build(List<int> shape) {
+      if (shape.length == 1) {
+        return _outputType == TensorType.float32
+            ? List<double>.filled(shape[0], 0.0)
+            : List<int>.filled(shape[0], 0);
+      }
+      return List.generate(
+        shape[0],
+        (_) => build(shape.sublist(1)),
+        growable: false,
+      );
+    }
+
+    return build(_outputShape);
   }
 
   /// Dequantizes (or, for a float32 model, simply reads) the raw
