@@ -8,6 +8,7 @@ class DetectionResult {
     required this.label,
     required this.confidence,
     required this.inferenceTimeMs,
+    this.realProbability,
   });
 
   /// REAL or FAKE.
@@ -18,6 +19,12 @@ class DetectionResult {
 
   /// Wall-clock time the TFLite interpreter took to run, in milliseconds.
   final int inferenceTimeMs;
+
+  /// The model's raw probability that the image is REAL, in [0.0, 1.0],
+  /// before thresholding. Null if the producer did not supply it. Used by
+  /// the accuracy-evaluation screen so thresholds / AUC can be analysed
+  /// offline.
+  final double? realProbability;
 
   bool get isFake => label == DetectionLabel.fake;
 
@@ -30,11 +37,13 @@ class DetectionResult {
     DetectionLabel? label,
     double? confidence,
     int? inferenceTimeMs,
+    double? realProbability,
   }) {
     return DetectionResult(
       label: label ?? this.label,
       confidence: confidence ?? this.confidence,
       inferenceTimeMs: inferenceTimeMs ?? this.inferenceTimeMs,
+      realProbability: realProbability ?? this.realProbability,
     );
   }
 

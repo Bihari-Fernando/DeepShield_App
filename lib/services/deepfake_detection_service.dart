@@ -19,10 +19,18 @@ import '../models/detection_result.dart';
 class DeepfakeDetectionService {
   DeepfakeDetectionService({
     this.modelAssetPath = 'assets/models/deepshield_int8.tflite',
+    this.interpolation = img.Interpolation.linear,
   });
 
   /// Path of the bundled .tflite model inside Flutter assets.
   final String modelAssetPath;
+
+  /// Resampling used when the photo is resized to the model's input size.
+  /// Defaults to linear (the app's original behaviour). The model was
+  /// trained and evaluated with Keras `flow_from_directory`, whose default
+  /// resize is *nearest*; the accuracy-evaluation screen can switch this to
+  /// measure whether the choice matters on-device.
+  final img.Interpolation interpolation;
 
   Interpreter? _interpreter;
 
@@ -116,7 +124,7 @@ class DeepfakeDetectionService {
       decoded,
       width: _inputWidth,
       height: _inputHeight,
-      interpolation: img.Interpolation.linear,
+      interpolation: interpolation,
     );
 
     final input = _buildInputBuffer(resized);
@@ -240,6 +248,7 @@ class DeepfakeDetectionService {
         label: isFake ? DetectionLabel.fake : DetectionLabel.real,
         confidence: confidence.isFinite ? confidence : 0.5,
         inferenceTimeMs: inferenceTimeMs,
+        realProbability: (expReal / sum).isFinite ? expReal / sum : null,
       );
     }
 
@@ -252,6 +261,7 @@ class DeepfakeDetectionService {
       label: isFake ? DetectionLabel.fake : DetectionLabel.real,
       confidence: isFake ? 1 - realProbability : realProbability,
       inferenceTimeMs: inferenceTimeMs,
+      realProbability: realProbability,
     );
   }
 

@@ -8,6 +8,7 @@ import '../models/detection_result.dart';
 import '../services/deepfake_detection_service.dart';
 import '../widgets/loading_overlay.dart';
 import '../widgets/primary_button.dart';
+import 'accuracy_eval_screen.dart';
 import 'benchmark_screen.dart';
 import 'result_screen.dart';
 
@@ -99,6 +100,41 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _showDevMenu() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.speed),
+              title: const Text('Latency benchmark'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const BenchmarkScreen()),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.fact_check_outlined),
+              title: const Text('Accuracy evaluation'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const AccuracyEvalScreen(),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -120,13 +156,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           const Spacer(),
                           // Hidden developer entry: long-press the shield to
-                          // open the on-device latency benchmark.
+                          // open the developer tools (benchmark / accuracy).
                           GestureDetector(
-                            onLongPress: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const BenchmarkScreen(),
-                              ),
-                            ),
+                            onLongPress: _showDevMenu,
                             child: Icon(
                               Icons.shield_outlined,
                               size: 88,
