@@ -9,6 +9,7 @@ import '../services/deepfake_detection_service.dart';
 import '../widgets/loading_overlay.dart';
 import '../widgets/primary_button.dart';
 import 'accuracy_eval_screen.dart';
+import 'auto_eval_screen.dart';
 import 'benchmark_screen.dart';
 import 'result_screen.dart';
 
@@ -118,8 +119,18 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.auto_mode),
+              title: const Text('Full evaluation (all 4 configs, auto)'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const AutoEvalScreen()),
+                );
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.fact_check_outlined),
-              title: const Text('Accuracy evaluation'),
+              title: const Text('Accuracy evaluation (manual)'),
               onTap: () {
                 Navigator.of(sheetContext).pop();
                 Navigator.of(context).push(

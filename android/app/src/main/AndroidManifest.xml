@@ -14,6 +14,10 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Developer full-evaluation screen reads the labelled test images
+         from the Pictures folder (Android 13+ media permission). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
     <application
         android:label="DeepShield"
         android:name="${applicationName}"
