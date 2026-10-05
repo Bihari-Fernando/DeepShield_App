@@ -8,6 +8,7 @@ import '../models/detection_result.dart';
 import '../services/deepfake_detection_service.dart';
 import '../widgets/loading_overlay.dart';
 import '../widgets/primary_button.dart';
+import 'benchmark_screen.dart';
 import 'result_screen.dart';
 
 /// Landing screen: lets the user pick an image (gallery or camera)
@@ -118,10 +119,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Column(
                         children: [
                           const Spacer(),
-                          Icon(
-                            Icons.shield_outlined,
-                            size: 88,
-                            color: theme.colorScheme.primary,
+                          // Hidden developer entry: long-press the shield to
+                          // open the on-device latency benchmark.
+                          GestureDetector(
+                            onLongPress: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const BenchmarkScreen(),
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.shield_outlined,
+                              size: 88,
+                              color: theme.colorScheme.primary,
+                            ),
                           ),
                           const SizedBox(height: 24),
                           Text(
