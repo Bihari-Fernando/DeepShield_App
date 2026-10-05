@@ -88,16 +88,12 @@ class _HomeScreenState extends State<HomeScreen> {
         _isAnalyzing = false;
         _errorMessage = e.message;
       });
-    } catch (e, st) {
+    } catch (e) {
       if (!mounted) return;
-      // TEMPORARY DEBUG: show the real exception instead of a generic
-      // message, so the root cause can be identified. Revert this once
-      // the underlying bug is fixed.
-      // ignore: avoid_print
-      print('DEBUG analyzeImage failure: $e\n$st');
       setState(() {
         _isAnalyzing = false;
-        _errorMessage = 'DEBUG: $e';
+        _errorMessage =
+            'Something went wrong while analyzing the image. Please try another photo.';
       });
     }
   }

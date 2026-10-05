@@ -202,9 +202,18 @@ class DeepfakeDetectionService {
   ///
   /// Two output layouts are supported out of the box:
   ///  * shape [1, 2]  -> [realScore, fakeScore] logits, softmax'd here.
-  ///  * shape [1, 1]  -> a single sigmoid-style FAKE probability.
-  /// If your model uses a different layout, adjust this method —
-  /// see MODEL_INTEGRATION.md.
+  ///  * shape [1, 1]  -> a single sigmoid output.
+  ///
+  /// IMPORTANT (model-specific): this app's bundled model was trained
+  /// with Keras `ImageDataGenerator.flow_from_directory(class_mode:
+  /// 'binary')`, which assigns `class_indices = {'fake': 0, 'real': 1}`
+  /// alphabetically. A `Dense(1, activation='sigmoid')` head trained
+  /// against that labeling outputs **P(real)**, not P(fake) — i.e. a
+  /// value near 1.0 means REAL, near 0.0 means FAKE. The original
+  /// version of this method assumed the opposite (a "fake probability"),
+  /// which silently inverted every single-output prediction. If you
+  /// swap in a different model, re-check its own label convention
+  /// before trusting this branch.
   DetectionResult _interpretOutput(dynamic output, int inferenceTimeMs) {
     final List<dynamic> row = (output as List).first as List;
     final bool isFloat = _outputType == TensorType.float32;
@@ -234,12 +243,14 @@ class DeepfakeDetectionService {
       );
     }
 
-    final fakeProbability = dequantized.first.clamp(0.0, 1.0);
-    final isFake = fakeProbability >= 0.5;
+    // dequantized.first is P(real) for this model (see note above),
+    // not P(fake) — so a LOW value means FAKE.
+    final realProbability = dequantized.first.clamp(0.0, 1.0);
+    final isFake = realProbability < 0.5;
 
     return DetectionResult(
       label: isFake ? DetectionLabel.fake : DetectionLabel.real,
-      confidence: isFake ? fakeProbability : 1 - fakeProbability,
+      confidence: isFake ? 1 - realProbability : realProbability,
       inferenceTimeMs: inferenceTimeMs,
     );
   }
