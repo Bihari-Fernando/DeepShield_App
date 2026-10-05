@@ -3,6 +3,17 @@ import 'dart:math' as math;
 
 import 'package:tflite_flutter/tflite_flutter.dart';
 
+/// What exactly is inside the timed region.
+enum BenchmarkMode {
+  /// `Interpreter.run(input, output)`: includes tflite_flutter copying the
+  /// input into, and the output out of, the native tensors.
+  runWithCopy,
+
+  /// `Interpreter.invoke()` only: the input tensor is filled once beforehand
+  /// and nothing is copied inside the timed region — pure model execution.
+  invokeOnly,
+}
+
 /// Latency statistics for one benchmark run of one model / thread-count.
 ///
 /// Every number here is measured on the device the app is running on;
@@ -17,11 +28,13 @@ class BenchmarkResult {
     required this.inputType,
     required this.outputShape,
     required this.outputType,
+    required this.mode,
   }) : timestamp = DateTime.now();
 
   final String modelAsset;
   final int threads;
   final int warmupRuns;
+  final BenchmarkMode mode;
 
   /// One entry per timed run, in milliseconds, in execution order.
   final List<double> latenciesMs;
@@ -69,6 +82,7 @@ class BenchmarkResult {
       'Timestamp: ${timestamp.toIso8601String()}',
       'Model asset: $modelAsset',
       'Input: $inputType $inputShape   Output: $outputType $outputShape',
+      'Timed call: ${mode == BenchmarkMode.invokeOnly ? 'Interpreter.invoke() only (input set once, no copy in timed region)' : 'Interpreter.run() (includes input/output copy)'}',
       'Threads: $threads (no extra delegate configured)',
       'Warm-up runs (discarded): $warmupRuns',
       'Timed runs: $timedRuns',
@@ -84,6 +98,9 @@ class BenchmarkResult {
 }
 
 /// Measures pure model-inference latency on this device.
+///
+/// Two modes (see [BenchmarkMode]): the default measures `invoke()` alone,
+/// the other measures `run()` including tflite_flutter's tensor copies.
 ///
 /// Methodology mirrors `benchmark_inference_speed` in
 /// `exp08_tflite_conversion_benchmarking.ipynb`: a random [0, 1) input
@@ -107,6 +124,7 @@ class BenchmarkService {
     required int threads,
     int warmupRuns = defaultWarmupRuns,
     int timedRuns = defaultTimedRuns,
+    BenchmarkMode mode = BenchmarkMode.invokeOnly,
     void Function(String label, double fraction)? onProgress,
   }) async {
     final options = InterpreterOptions()..threads = threads;
@@ -122,9 +140,25 @@ class BenchmarkService {
 
       final total = warmupRuns + timedRuns;
       var done = 0;
+      final invokeOnly = mode == BenchmarkMode.invokeOnly;
+
+      if (invokeOnly) {
+        // Copies the input into the native input tensor once. The tensor
+        // keeps its contents, so later invoke() calls reuse it without any
+        // further copying. Not timed and not counted as a warm-up.
+        interpreter.run(input, output);
+      }
+
+      void callModel() {
+        if (invokeOnly) {
+          interpreter.invoke();
+        } else {
+          interpreter.run(input, output);
+        }
+      }
 
       for (var i = 0; i < warmupRuns; i++) {
-        interpreter.run(input, output);
+        callModel();
         done++;
         onProgress?.call('Warm-up $done/$warmupRuns', done / total);
         // Yield so the progress bar can repaint. Outside any timed region.
@@ -137,7 +171,7 @@ class BenchmarkService {
         stopwatch
           ..reset()
           ..start();
-        interpreter.run(input, output);
+        callModel();
         stopwatch.stop();
         latencies.add(stopwatch.elapsedMicroseconds / 1000.0);
 
@@ -155,6 +189,7 @@ class BenchmarkService {
         inputType: _typeName(inputTensor.type),
         outputShape: List<int>.from(outputTensor.shape),
         outputType: _typeName(outputTensor.type),
+        mode: mode,
       );
     } finally {
       interpreter.close();

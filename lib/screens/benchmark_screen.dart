@@ -31,6 +31,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
 
   int _modelIndex = 0;
   int _threads = 4;
+  BenchmarkMode _mode = BenchmarkMode.invokeOnly;
   bool _running = false;
   String _status = '';
   double _progress = 0;
@@ -49,6 +50,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
       final result = await _service.run(
         modelAsset: model.asset,
         threads: _threads,
+        mode: _mode,
         onProgress: (label, fraction) {
           if (!mounted) return;
           setState(() {
@@ -66,6 +68,56 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
             'If this is the Float32 model, make sure the file was added to '
             'assets/models/ and the app was rebuilt.\n\nDetails: $e';
       });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _running = false;
+          _status = '';
+        });
+      }
+    }
+  }
+
+  /// 3 rounds x {Int8, Float32} x {1, 4 threads} = 12 reports, interleaved
+  /// (round-robin) so thermal drift is spread across configurations.
+  Future<void> _runAll() async {
+    setState(() {
+      _running = true;
+      _error = null;
+      _progress = 0;
+      _status = 'Starting…';
+    });
+    const rounds = 3;
+    const threadOptions = [4, 1];
+    final totalJobs = rounds * _models.length * threadOptions.length;
+    var job = 0;
+    try {
+      for (var round = 1; round <= rounds; round++) {
+        for (final threads in threadOptions) {
+          for (final model in _models) {
+            job++;
+            final label = 'Job $job/$totalJobs · ${model.label} · '
+                '$threads thread${threads == 1 ? '' : 's'}';
+            final result = await _service.run(
+              modelAsset: model.asset,
+              threads: threads,
+              mode: _mode,
+              onProgress: (l, f) {
+                if (!mounted) return;
+                setState(() {
+                  _status = '$label · $l';
+                  _progress = ((job - 1) + f) / totalJobs;
+                });
+              },
+            );
+            if (!mounted) return;
+            setState(() => _results.insert(0, result));
+          }
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Run-all failed at job $job.\n\nDetails: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -129,6 +181,22 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
                   ? null
                   : (s) => setState(() => _threads = s.first),
             ),
+            const SizedBox(height: 16),
+            Text('Timed call', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            SegmentedButton<BenchmarkMode>(
+              segments: const [
+                ButtonSegment<BenchmarkMode>(
+                    value: BenchmarkMode.invokeOnly,
+                    label: Text('invoke() only')),
+                ButtonSegment<BenchmarkMode>(
+                    value: BenchmarkMode.runWithCopy,
+                    label: Text('run() + copy')),
+              ],
+              selected: {_mode},
+              onSelectionChanged:
+                  _running ? null : (s) => setState(() => _mode = s.first),
+            ),
             const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: _running ? null : _run,
@@ -136,6 +204,15 @@ class _BenchmarkScreenState extends State<BenchmarkScreen> {
               label: Text(_running ? 'Running…' : 'Run benchmark'),
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(52),
+              ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _running ? null : _runAll,
+              icon: const Icon(Icons.auto_mode),
+              label: const Text('Run all 12 configs'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
               ),
             ),
             if (_running) ...[
@@ -205,7 +282,8 @@ class _ResultCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '$name · ${result.threads} thread${result.threads == 1 ? '' : 's'}',
+              '$name · ${result.threads} thread${result.threads == 1 ? '' : 's'}'
+              ' · ${result.mode == BenchmarkMode.invokeOnly ? 'invoke()' : 'run()'}',
               style: theme.textTheme.titleSmall,
             ),
             const SizedBox(height: 6),
