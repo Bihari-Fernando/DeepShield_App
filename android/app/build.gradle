@@ -24,7 +24,8 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.deepshield.app"
-    compileSdk 35
+    // tflite_flutter 0.12+ is compiled against SDK 36.
+    compileSdk 36
     ndkVersion flutter.ndkVersion
 
     compileOptions {

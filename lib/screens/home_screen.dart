@@ -8,6 +8,9 @@ import '../models/detection_result.dart';
 import '../services/deepfake_detection_service.dart';
 import '../widgets/loading_overlay.dart';
 import '../widgets/primary_button.dart';
+import 'accuracy_eval_screen.dart';
+import 'auto_eval_screen.dart';
+import 'benchmark_screen.dart';
 import 'result_screen.dart';
 
 /// Landing screen: lets the user pick an image (gallery or camera)
@@ -98,6 +101,51 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _showDevMenu() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.speed),
+              title: const Text('Latency benchmark'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const BenchmarkScreen()),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.auto_mode),
+              title: const Text('Full evaluation (all 4 configs, auto)'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const AutoEvalScreen()),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.fact_check_outlined),
+              title: const Text('Accuracy evaluation (manual)'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const AccuracyEvalScreen(),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -118,10 +166,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Column(
                         children: [
                           const Spacer(),
-                          Icon(
-                            Icons.shield_outlined,
-                            size: 88,
-                            color: theme.colorScheme.primary,
+                          // Hidden developer entry: long-press the shield to
+                          // open the developer tools (benchmark / accuracy).
+                          GestureDetector(
+                            onLongPress: _showDevMenu,
+                            child: Icon(
+                              Icons.shield_outlined,
+                              size: 88,
+                              color: theme.colorScheme.primary,
+                            ),
                           ),
                           const SizedBox(height: 24),
                           Text(

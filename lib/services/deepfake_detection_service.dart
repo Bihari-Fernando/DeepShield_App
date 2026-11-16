@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
@@ -20,10 +19,18 @@ import '../models/detection_result.dart';
 class DeepfakeDetectionService {
   DeepfakeDetectionService({
     this.modelAssetPath = 'assets/models/deepshield_int8.tflite',
+    this.interpolation = img.Interpolation.linear,
   });
 
   /// Path of the bundled .tflite model inside Flutter assets.
   final String modelAssetPath;
+
+  /// Resampling used when the photo is resized to the model's input size.
+  /// Defaults to linear (the app's original behaviour). The model was
+  /// trained and evaluated with Keras `flow_from_directory`, whose default
+  /// resize is *nearest*; the accuracy-evaluation screen can switch this to
+  /// measure whether the choice matters on-device.
+  final img.Interpolation interpolation;
 
   Interpreter? _interpreter;
 
@@ -117,7 +124,7 @@ class DeepfakeDetectionService {
       decoded,
       width: _inputWidth,
       height: _inputHeight,
-      interpolation: img.Interpolation.linear,
+      interpolation: interpolation,
     );
 
     final input = _buildInputBuffer(resized);
@@ -130,70 +137,105 @@ class DeepfakeDetectionService {
     return _interpretOutput(output, stopwatch.elapsedMilliseconds);
   }
 
-  /// Builds a quantized input tensor shaped [1, H, W, C].
+  /// Builds an input tensor shaped [1, H, W, C] as plain nested Lists.
   ///
   /// Values are normalized to [0, 1] the same way the model was
-  /// trained, then quantized with the model's own scale/zero-point —
-  /// this is the correct way to feed an INT8 model and avoids ever
-  /// converting the model itself back to float32.
+  /// trained. For an int8/uint8 model that's then quantized with the
+  /// model's own scale/zero-point; for a float32 model (e.g. one
+  /// converted with `inference_input_type = tf.float32` so only the
+  /// weights are int8-quantized internally) the normalized [0,1]
+  /// value is used directly, matching how the model was trained and
+  /// evaluated.
+  ///
+  /// This builds nested `List`s by hand instead of a flat TypedData
+  /// buffer reshaped via tflite_flutter's `reshape` extension: that
+  /// extension throws `NoSuchMethodError` on `Float32List` at runtime
+  /// (a limitation of the package, not of the model), even though it
+  /// compiles fine. Plain nested Lists work for every tensor type.
   dynamic _buildInputBuffer(img.Image image) {
-    final isInt8 = _inputType == TensorType.int8;
-    final length = _inputHeight * _inputWidth * _inputChannels;
+    final bool isFloat = _inputType == TensorType.float32;
+    final bool isInt8 = _inputType == TensorType.int8;
 
-    final Int8List? int8Buffer = isInt8 ? Int8List(length) : null;
-    final Uint8List? uint8Buffer = isInt8 ? null : Uint8List(length);
+    final List<List<List<num>>> rows = List.generate(
+      _inputHeight,
+      (y) => List.generate(
+        _inputWidth,
+        (x) {
+          final pixel = image.getPixel(x, y);
+          final List<num> channelValues = _inputChannels == 1
+              ? [img.getLuminance(pixel)]
+              : [pixel.r, pixel.g, pixel.b];
 
-    var i = 0;
-    for (var y = 0; y < _inputHeight; y++) {
-      for (var x = 0; x < _inputWidth; x++) {
-        final pixel = image.getPixel(x, y);
+          return channelValues.map((raw) {
+            final normalized = raw / 255.0;
+            if (isFloat) {
+              return normalized.toDouble();
+            }
+            final quantized =
+                (normalized / _inputScale + _inputZeroPoint).round();
+            return isInt8
+                ? quantized.clamp(-128, 127)
+                : quantized.clamp(0, 255);
+          }).toList(growable: false);
+        },
+        growable: false,
+      ),
+      growable: false,
+    );
 
-        final List<num> channelValues = _inputChannels == 1
-            ? [img.getLuminance(pixel)]
-            : [pixel.r, pixel.g, pixel.b];
+    return [rows];
+  }
 
-        for (final raw in channelValues) {
-          final normalized = raw / 255.0;
-          final quantized =
-              (normalized / _inputScale + _inputZeroPoint).round();
-
-          if (isInt8) {
-            int8Buffer![i] = quantized.clamp(-128, 127);
-          } else {
-            uint8Buffer![i] = quantized.clamp(0, 255);
-          }
-          i++;
-        }
+  /// Builds an output buffer matching [_outputShape] as plain nested
+  /// Lists (see [_buildInputBuffer] for why this avoids `reshape`).
+  dynamic _buildOutputBuffer() {
+    List<dynamic> build(List<int> shape) {
+      if (shape.length == 1) {
+        return _outputType == TensorType.float32
+            ? List<double>.filled(shape[0], 0.0)
+            : List<int>.filled(shape[0], 0);
       }
+      return List.generate(
+        shape[0],
+        (_) => build(shape.sublist(1)),
+        growable: false,
+      );
     }
 
-    final flat = isInt8 ? int8Buffer! : uint8Buffer!;
-    return flat.reshape([1, _inputHeight, _inputWidth, _inputChannels]);
+    return build(_outputShape);
   }
 
-  dynamic _buildOutputBuffer() {
-    final isInt8 = _outputType == TensorType.int8;
-    final flatLength = _outputShape.reduce((a, b) => a * b);
-    final flat = isInt8 ? Int8List(flatLength) : Uint8List(flatLength);
-    return flat.reshape(_outputShape);
-  }
-
-  /// Dequantizes the raw output and turns it into a [DetectionResult].
+  /// Dequantizes (or, for a float32 model, simply reads) the raw
+  /// output and turns it into a [DetectionResult].
   ///
   /// Two output layouts are supported out of the box:
   ///  * shape [1, 2]  -> [realScore, fakeScore] logits, softmax'd here.
-  ///  * shape [1, 1]  -> a single sigmoid-style FAKE probability.
-  /// If your model uses a different layout, adjust this method —
-  /// see MODEL_INTEGRATION.md.
+  ///  * shape [1, 1]  -> a single sigmoid output.
+  ///
+  /// IMPORTANT (model-specific): this app's bundled model was trained
+  /// with Keras `ImageDataGenerator.flow_from_directory(class_mode:
+  /// 'binary')`, which assigns `class_indices = {'fake': 0, 'real': 1}`
+  /// alphabetically. A `Dense(1, activation='sigmoid')` head trained
+  /// against that labeling outputs **P(real)**, not P(fake) — i.e. a
+  /// value near 1.0 means REAL, near 0.0 means FAKE. The original
+  /// version of this method assumed the opposite (a "fake probability"),
+  /// which silently inverted every single-output prediction. If you
+  /// swap in a different model, re-check its own label convention
+  /// before trusting this branch.
   DetectionResult _interpretOutput(dynamic output, int inferenceTimeMs) {
     final List<dynamic> row = (output as List).first as List;
-    final dequantized = row
-        .map((v) => _outputScale * ((v as num).toInt() - _outputZeroPoint))
+    final bool isFloat = _outputType == TensorType.float32;
+    final List<double> dequantized = row
+        .map(
+          (v) => isFloat
+              ? (v as num).toDouble()
+              : _outputScale * ((v as num).toInt() - _outputZeroPoint),
+        )
         .toList();
 
     if (dequantized.length >= 2) {
-      final realScore = dequantized[0] as double;
-      final fakeScore = dequantized[1] as double;
+      final realScore = dequantized[0];
+      final fakeScore = dequantized[1];
       final isFake = fakeScore >= realScore;
 
       final maxScore = math.max(realScore, fakeScore);
@@ -206,16 +248,20 @@ class DeepfakeDetectionService {
         label: isFake ? DetectionLabel.fake : DetectionLabel.real,
         confidence: confidence.isFinite ? confidence : 0.5,
         inferenceTimeMs: inferenceTimeMs,
+        realProbability: (expReal / sum).isFinite ? expReal / sum : null,
       );
     }
 
-    final fakeProbability = (dequantized.first as double).clamp(0.0, 1.0);
-    final isFake = fakeProbability >= 0.5;
+    // dequantized.first is P(real) for this model (see note above),
+    // not P(fake) — so a LOW value means FAKE.
+    final realProbability = dequantized.first.clamp(0.0, 1.0);
+    final isFake = realProbability < 0.5;
 
     return DetectionResult(
       label: isFake ? DetectionLabel.fake : DetectionLabel.real,
-      confidence: isFake ? fakeProbability : 1 - fakeProbability,
+      confidence: isFake ? 1 - realProbability : realProbability,
       inferenceTimeMs: inferenceTimeMs,
+      realProbability: realProbability,
     );
   }
 

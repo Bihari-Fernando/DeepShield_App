@@ -13,6 +13,46 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Some plugin modules (tflite_flutter 0.12.x) declare Java 11 but leave the
+// Kotlin JVM target at the toolchain default (17), which makes
+// compileDebugKotlin fail with "Inconsistent JVM-target compatibility".
+// Force every Android subproject onto Java 17 / Kotlin 17 so they match.
+// This has to run AFTER each module's own build script has finished
+// (the plugin's script sets Java 11 in its android {} block, so anything
+// applied earlier gets overwritten). evaluationDependsOn(":app") above may
+// already have evaluated a module by the time we get here, and Gradle
+// rejects afterEvaluate on an evaluated project — hence the state check.
+subprojects { subproject ->
+    def forceJvm17 = {
+        subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+            compilerOptions {
+                jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+            }
+        }
+
+        def androidExtension = subproject.extensions.findByName("android")
+        if (androidExtension != null) {
+            androidExtension.compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+        }
+
+        // Also pin the javac tasks directly so the level holds no matter
+        // how the module's own script configured it.
+        subproject.tasks.withType(JavaCompile).configureEach {
+            sourceCompatibility = JavaVersion.VERSION_17.toString()
+            targetCompatibility = JavaVersion.VERSION_17.toString()
+        }
+    }
+
+    if (subproject.state.executed) {
+        forceJvm17()
+    } else {
+        subproject.afterEvaluate { forceJvm17() }
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }

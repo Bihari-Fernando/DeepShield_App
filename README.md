@@ -41,8 +41,8 @@ change**. See `MODEL_INTEGRATION.md`.
 
 ## Getting started
 
-**Prerequisites:** Flutter 3.19+ (stable channel recommended), Android
-SDK with API 35, JDK 17.
+**Prerequisites:** Flutter 3.22+ (stable channel recommended), Android
+SDK with API 36, JDK 17.
 
 ```bash
 flutter --version   # confirm Flutter is installed

@@ -4,8 +4,8 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.3.0 <4.0.0'
-  flutter: ">=3.19.0"
+  sdk: '>=3.4.0 <4.0.0'
+  flutter: ">=3.22.0"
 
 dependencies:
   flutter:
@@ -13,7 +13,9 @@ dependencies:
   cupertino_icons: ^1.0.6
 
   # On-device TFLite inference (INT8 quantized models supported natively).
-  tflite_flutter: ^0.10.4
+  # 0.10.x no longer compiles on current Dart (UnmodifiableUint8ListView was
+  # removed); 0.12.1 also adds Android 16KB page size support.
+  tflite_flutter: ^0.12.1
 
   # Image decode/resize for preprocessing before inference.
   image: ^4.1.7
